@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="panel" style="max-width:380px;margin:40px auto">
+  <h2 style="margin-top:0">Log in</h2>
+  {% if error %}<p class="{{ 'ok' if 'Thank' in error else 'bad' }}">{{ error }}</p>{% endif %}
+  <form method="post" action="/login" class="stack">
+    <select name="name" required>{% for n in names %}<option>{{ n }}</option>{% endfor %}</select>
+    <input name="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN" required autofocus>
+    <button>Log in</button>
+  </form>
+</div>
+{% endblock %}

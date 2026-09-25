@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block body %}
+{% if not shift %}
+<div class="panel" style="max-width:420px">
+  <h2 style="margin-top:0">Open your shift</h2>
+  <p class="muted">Count the cash in the drawer and enter it as the opening float.</p>
+  <form method="post" action="/shift/open" class="stack">
+    <input name="opening_float" inputmode="decimal" placeholder="Opening cash (৳)" required>
+    <button>Open shift</button>
+  </form>
+</div>
+{% else %}
+<div class="grid" style="grid-template-columns:minmax(0,3fr) minmax(0,2fr)">
+  <div>
+    <div class="panel">
+      <input id="q" placeholder="Scan barcode or type medicine name" autofocus autocomplete="off" style="width:100%">
+      <div id="results"></div>
+    </div>
+    <div class="panel">
+      <div class="table-wrap"><table id="cart"><thead><tr><th>Item</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Total</th><th></th></tr></thead><tbody></tbody></table></div>
+      <p class="big" id="total">৳0.00</p>
+      <div class="stack">
+        <select id="method"><option value="cash">Cash</option><option value="bkash">bKash</option><option value="nagad">Nagad</option><option value="card">Card</option></select>
+        <input id="tendered" inputmode="decimal" placeholder="Cash received (৳)">
+        <button id="pay">Complete sale</button>
+      </div>
+      <p id="msg"></p>
+    </div>
+  </div>
+  <div>
+    <div class="panel">
+      <strong>This shift</strong>
+      <div class="table-wrap"><table id="recent"><tbody></tbody></table></div>
+    </div>
+    <div class="panel">
+      <strong>Cash payout</strong>
+      <div class="stack"><input id="p_amount" inputmode="decimal" placeholder="Amount (৳)"><input id="p_reason" placeholder="Reason (required)"><button class="secondary" id="payout">Record payout</button></div>
+    </div>
+    <div class="panel">
+      <strong>Close shift</strong>
+      <p class="muted">Count all cash in the drawer and enter the total.</p>
+      <form method="post" action="/shift/close" class="stack" onsubmit="return confirm('Close shift with this count?')">
+        <input name="counted_cash" inputmode="decimal" placeholder="Counted cash (৳)" required>
+        <button class="danger">Close shift</button>
+      </form>
+    </div>
+  </div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const taka = p => "৳" + (p / 100).toLocaleString("en-IN", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const cart = new Map();
+async function api(url, body) {
+  const r = await fetch(url, body ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)} : {});
+  const j = await r.json().catch(() => ({detail: "session expired - log in again"}));
+  if (!r.ok) throw new Error(j.detail || r.statusText);
+  return j;
+}
+function render() {
+  const tb = $("#cart tbody"); tb.innerHTML = ""; let total = 0;
+  for (const [id, it] of cart) {
+    total += it.price * it.qty;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td></td><td class="n"><input type="number" min="1" value="${it.qty}" style="width:70px"></td>
+      <td class="n">${taka(it.price)}</td><td class="n">${taka(it.price * it.qty)}</td><td><button class="secondary">✕</button></td>`;
+    tr.cells[0].textContent = it.name;
+    tr.querySelector("input").onchange = e => { it.qty = Math.max(1, parseInt(e.target.value) || 1); render(); };
+    tr.querySelector("button").onclick = () => { cart.delete(id); render(); };
+    tb.appendChild(tr);
+  }
+  $("#total").textContent = taka(total);
+}
+function add(p) {
+  const it = cart.get(p.id) || {name: p.name, price: p.price, qty: 0};
+  it.qty += 1; cart.set(p.id, it); render();
+  $("#q").value = ""; $("#results").innerHTML = ""; $("#q").focus();
+}
+let timer;
+$("#q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(search, 200); });
+$("#q").addEventListener("keydown", async e => {
+  if (e.key !== "Enter") return;
+  e.preventDefault(); const rows = await api("/api/search?q=" + encodeURIComponent($("#q").value));
+  if (rows.length === 1) add(rows[0]); else show(rows);
+});
+async function search() { const q = $("#q").value.trim(); if (q.length < 2) return show([]); show(await api("/api/search?q=" + encodeURIComponent(q))); }
+function show(rows) {
+  const box = $("#results"); box.innerHTML = "";
+  for (const p of rows.slice(0, 8)) {
+    const b = document.createElement("button"); b.className = "secondary"; b.style = "display:block;width:100%;text-align:left;margin-top:6px";
+    b.textContent = `${p.name} ${p.generic ? "(" + p.generic + ")" : ""} - ${taka(p.price)} - stock ${p.stock}`;
+    b.onclick = () => add(p); box.appendChild(b);
+  }
+}
+$("#pay").onclick = async () => {
+  if (!cart.size) return;
+  const items = [...cart].map(([id, it]) => ({product_id: id, qty: it.qty}));
+  try {
+    const s = await api("/api/sale", {items, method: $("#method").value, tendered: $("#tendered").value || null});
+    $("#msg").className = "ok";
+    $("#msg").textContent = `Receipt ${s.receipt_no}: ${taka(s.total)}` + (s.method === "cash" ? ` - change ${taka(s.change)}` : "") + (s.printed ? "" : " (printer offline!)");
+    cart.clear(); render(); $("#tendered").value = ""; recent();
+  } catch (e) { $("#msg").className = "bad"; $("#msg").textContent = e.message; }
+  $("#q").focus();
+};
+$("#payout").onclick = async () => {
+  try { await api("/api/payout", {amount: $("#p_amount").value, reason: $("#p_reason").value});
+        $("#p_amount").value = $("#p_reason").value = ""; alert("Payout recorded"); }
+  catch (e) { alert(e.message); }
+};
+async function recent() {
+  const tb = $("#recent tbody"); tb.innerHTML = "";
+  for (const s of await api("/api/my-sales")) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${s.receipt_no}</td><td class="n">${taka(s.total)}</td><td>${s.method}</td><td>${s.status === "completed" ? '<button class="secondary">Void</button>' : s.status}</td>`;
+    const b = tr.querySelector("button");
+    if (b) b.onclick = async () => {
+      const reason = prompt("Reason for void (required):"); if (!reason) return;
+      try { const r = await api("/api/void", {sale_id: s.id, reason}); alert(r.status === "voided" ? "Voided" : "Sent to owner for approval"); recent(); }
+      catch (e) { alert(e.message); }
+    };
+    tb.appendChild(tr);
+  }
+}
+recent();
+</script>
+{% endif %}
+{% endblock %}

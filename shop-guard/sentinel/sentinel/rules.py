@@ -50,6 +50,7 @@ class Rules:
     alert_min_score: int = 6
     evidence_min_score: int = 4
     daily_report_at: dt.time | None = None
+    till_camera: str | None = None
 
     @classmethod
     def from_dict(cls, raw: dict) -> "Rules":
@@ -69,6 +70,7 @@ class Rules:
             alert_min_score=int(raw.get("alert_min_score", 6)),
             evidence_min_score=int(raw.get("evidence_min_score", 4)),
             daily_report_at=dt.time.fromisoformat(report) if report else None,
+            till_camera=raw.get("till_camera") or None,
         )
 
     @classmethod

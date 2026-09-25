@@ -1,8 +1,14 @@
 # Shop Guard
 
-Self-hosted AI CCTV for two Tapo cameras. It records 24/7, reviews every person
-event that matters with Claude vision, keeps evidence in a form that shows if anyone
-has altered it, and sends alerts to your phone.
+Self-hosted anti-theft system for a pharmacy run remotely. It has three parts:
+
+- **Cameras + AI review** (Frigate + Sentinel): records 24/7, reviews every person
+  event that matters with Claude vision, keeps evidence in a form that shows if anyone
+  has altered it, and sends alerts to your phone.
+- **POS** (`pos/`): a till where the cash drawer only opens when a sale is rung up.
+  Every sale, void and cash count is tied to a named cashier.
+- **Drawer sensor** (`firmware/`): an ESP32 that reports every physical opening of
+  the drawer. An opening with no sale behind it is caught on camera within a minute.
 
 ```
 Tapo cameras ──RTSP──▶ Frigate 0.18 ──MQTT events──▶ Sentinel ──▶ Claude (vision review)
@@ -32,6 +38,61 @@ everything on the mini PC, whether or not a subscription is active.
 | Dead-man switch | Pings [healthchecks.io](https://healthchecks.io) every minute. If the box is unplugged, loses power or is stolen, healthchecks.io alerts you, because a dead box can't send its own alert. |
 | Off-site copies | Every 15 min the evidence locker plus a daily database snapshot is copied to Backblaze B2 using a key that **cannot delete**. Wiping the shop box can't wipe the copy. |
 | Shift log | Every face-recognised appearance of enrolled staff. `/shifts` shows who was in each day; `/api/present?at=2026-02-10T14:30` lists who was there around a given moment. |
+
+## POS: how cash theft becomes visible
+
+| Rule | Enforced by |
+|---|---|
+| The drawer opens only for a cash sale, a payout, or an owner "no sale". The printer sends the open pulse (the drawer plugs into it) and the POS only asks at those moments. | `pos/service.py`, `pos/printer.py` |
+| **Any physical opening without a POS request in the previous 6 s = alert, plus a Claude review of the till camera**: 20 s before to 40 s after. It covers key, force and a cut sensor wire, because a cut wire reads as "open". | `pos/drawer.py`, `firmware/drawer_sensor` |
+| Drawer left open more than 60 s, sensor silent more than 90 s, or the POS asked for an opening but the sensor never saw one (sensor bypassed) = alert. | `pos/drawer.py` |
+| Prices come from the catalogue on the server; the till can't send its own price. | `Pos.sell` |
+| Each cashier logs in with their own PIN (5 wrong tries = 5-minute lock + alert). One open shift at a time. | `Pos.login`, `Pos.open_shift` |
+| **Blind shift close**: the cashier enters the counted cash and never sees the expected amount, so there's no "surplus" to pocket. Any shortfall alerts you. | `Pos.close_shift` |
+| Voids: a cashier can void only their own sale within 10 minutes; anything else waits for your approval. **Every void is alerted and the original sale's footage reviewed.** | `Pos.void` |
+| Payouts (cash out for expenses) need a reason and show on your dashboard. | `Pos.payout` |
+| Blind stock counts value missing stock at cost. | `Pos.record_count` |
+| Every action is written to a hash-chained audit log, so records can't be quietly edited. The POS database is snapshotted hourly into the evidence tree and goes off-site. | `pos/db.py` |
+
+**Claude in the POS**
+- *Add product from photo*: photograph a box and Claude fills in brand, generic,
+  strength, form, manufacturer, MRP and barcode for you to check.
+- *AI loss analysis*: reads shifts, voids, payouts, drawer alerts, stock losses and
+  the face-recognition shift log, then ranks where money is leaking and whose shifts
+  it lines up with.
+
+**Screens**
+- Till: `http://<box>:8090`, on a counter PC or tablet with a USB barcode scanner.
+- Owner dashboard: `http://<box>:8090/owner`, from Australia over Tailscale.
+
+### POS hardware (AUD, approximate)
+
+| Item | Price |
+|---|---|
+| 80 mm LAN thermal receipt printer with a drawer port (e.g. Xprinter XP-N160II LAN, sold in Dhaka) | A$80-120 |
+| Cash drawer with an RJ11 printer-trigger cable and a **lock** (you keep the key) | A$60-100 |
+| USB barcode scanner | A$30-50 |
+| Counter PC or 10" tablet for the till screen | A$150-300 |
+| Olimex ESP32-POE-ISO + normally-open reed switch + magnet | A$50 |
+
+**Wiring the drawer sensor:**
+1. Mount the reed switch on the cabinet frame and the magnet on the drawer, so the
+   switch is closed when the drawer is shut.
+2. Wire it between GPIO 4 and GND.
+3. Run the cable inside the counter, out of reach.
+4. Power the ESP32 from a PoE port on the camera switch, so it rides the same UPS.
+
+### POS setup
+1. In `.env`, set `POS_SECRET`, `POS_OWNER_NAME`, `POS_OWNER_PIN` (6-8 digits) and `PRINTER_HOST`.
+2. Create the drawer sensor's MQTT login, then reload the broker:
+   `docker compose exec mqtt mosquitto_passwd -b /mosquitto/data/passwd drawer <password>`
+   `docker compose kill -s SIGHUP mqtt`
+3. Flash `firmware/drawer_sensor/drawer_sensor.ino`. Set `MQTT_HOST` to the mini PC's
+   LAN IP and `MQTT_PASS` to the password above. The sketch has **not** been compiled
+   yet, so verify it on your test board.
+4. Set `till_camera:` in `sentinel/rules.yaml` to the camera above the drawer.
+5. On the owner dashboard, add each cashier with the same name they have in
+   Frigate's Face Library. Add products; the photo button speeds this up.
 
 ## Hardware (AUD, approximate Sep 2026 retail)
 
@@ -154,6 +215,10 @@ Nothing ships until every row triggers the expected alert:
 | Pull the mini PC's power (UPS unplugged) | healthchecks.io alert after its grace period |
 | Delete a clip in `evidence/` | `/api/evidence/verify` reports it; the B2 copy survives |
 | Walk into the till zone after hours | Instant ping, then an AI-reviewed alert |
+| Open the cash drawer with its key (no sale) | "unauthorized open" alert, then an AI review of the till clip about a minute later |
+| Pull the drawer sensor's cable | "unauthorized open" alert (cut wire = open) |
+| Unplug the ESP32 | "sensor offline" alert within about 90 s |
+| Close a shift with cash missing | "cash short" alert; the variance shows on the dashboard |
 
 After aiming each camera, save its view as known-good. Do it again at night so the
 infrared view is also recognised:

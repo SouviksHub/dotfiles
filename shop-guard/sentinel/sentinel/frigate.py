@@ -34,6 +34,12 @@ class Frigate:
             time.sleep(wait_s)
         raise RuntimeError(f"could not fetch clip for {event_id}: {last}")
 
+    def clip_range(self, camera: str, start: float, end: float) -> bytes:
+        r = self.http.get(f"/{camera}/start/{start:.0f}/end/{end:.0f}/clip.mp4")
+        if r.status_code != 200 or len(r.content) < 10_000:
+            raise RuntimeError(f"no recording for {camera} {start:.0f}-{end:.0f} (HTTP {r.status_code})")
+        return r.content
+
     def snapshot(self, event_id: str) -> bytes | None:
         r = self.http.get(f"/events/{event_id}/snapshot.jpg", params={"bbox": 1, "quality": 90})
         return r.content if r.status_code == 200 else None

@@ -21,6 +21,11 @@ from .rules import Rules, face_name
 
 log = logging.getLogger(__name__)
 
+POS_ALERT_TOPIC = "shopguard/pos/alert"
+# POS alerts whose till footage is always archived, whatever the AI score.
+ALWAYS_ARCHIVE = {"unauthorized_open", "void", "kick_without_open"}
+POS_CLIP_BEFORE_S, POS_CLIP_AFTER_S = 20, 40
+
 
 class Pipeline:
     def __init__(self, *, rules: Rules, db: DB, frigate: Frigate, analyzer: Analyzer,
@@ -57,6 +62,29 @@ class Pipeline:
         self.db.add_pending(ev, face_name(ev), reasons)
         self.jobs.put((ev, reasons))
 
+    def on_pos_alert(self, alert: dict) -> None:
+        """Drawer/void/cash alerts from the POS: tell the owner now, review the till footage next."""
+        kind = alert.get("kind", "pos")
+        ts = float(alert.get("ts") or time.time())
+        when = self.rules.local(ts).strftime("%a %d %b %H:%M:%S")
+        who = alert.get("cashier") or "-"
+        self.telegram.message(f"POS ALERT: {kind.replace('_', ' ')} at {when}\nCashier: {who}\n{alert.get('detail', '')}")
+        camera = self.rules.till_camera
+        if not camera or kind in ("sensor_offline", "pin_lockout", "stock_loss", "cash_short"):
+            return  # nothing specific to look at on camera
+        # For a void, the interesting moment is the original sale, not the void itself.
+        centre = float(alert.get("sale_ts") or ts)
+        ev = {"id": f"pos-{kind}-{int(ts)}", "camera": camera, "label": "person", "sub_label": alert.get("cashier"),
+              "start_time": centre - POS_CLIP_BEFORE_S, "end_time": centre + POS_CLIP_AFTER_S,
+              "entered_zones": [], "window": True, "pos_alert": alert}
+        reasons = [f"pos:{kind}"]
+        self.db.add_pending(ev, alert.get("cashier"), reasons)
+        # Queue once the footage exists, so the worker never idles waiting for it.
+        delay = max(0.0, ev["end_time"] + 15 - time.time())
+        timer = threading.Timer(delay, self.jobs.put, args=((ev, reasons),))
+        timer.daemon = True
+        timer.start()
+
     def _early_warning(self, ev: dict) -> None:
         """Real-time ping for after-hours presence, before the event even ends."""
         if ev["id"] in self._pinged or self.rules.is_open(float(ev["start_time"])):
@@ -72,7 +100,10 @@ class Pipeline:
     def process(self, ev: dict, reasons: list[str]) -> None:
         event_id, person = ev["id"], face_name(ev)
         local = self.rules.local(float(ev["start_time"]))
-        clip = self.frigate.clip(event_id)
+        if ev.get("window"):
+            clip = self.frigate.clip_range(ev["camera"], float(ev["start_time"]), float(ev["end_time"]))
+        else:
+            clip = self.frigate.clip(event_id)
         frames = sample_frames(clip, count=self.frames_per_event)
         if not frames:
             raise RuntimeError("no frames could be extracted from clip")
@@ -85,19 +116,26 @@ class Pipeline:
             "face_recognition_tag": person,
             "why_flagged": reasons,
         }
+        if ev.get("pos_alert"):
+            context["pos_alert"] = ev["pos_alert"]
+            context["note"] = ("This clip is the till camera around a POS alert. Focus on the cash drawer and "
+                               "the cashier's hands: was cash handled, and did it go to the customer or elsewhere?")
         assessment = self.analyzer.review(frames, context)
         score = assessment.suspicion_score
 
         evidence = None
         watched = any(r.startswith("watchlist:") for r in reasons)
-        if score >= self.rules.evidence_min_score or watched:
-            snapshot = self.frigate.snapshot(event_id)
+        must_archive = any(r.split(":", 1)[-1] in ALWAYS_ARCHIVE for r in reasons if r.startswith("pos:"))
+        snapshot = frames[len(frames) // 2][1] if ev.get("window") else None
+        if score >= self.rules.evidence_min_score or watched or must_archive:
+            snapshot = snapshot or self.frigate.snapshot(event_id)
             files = {"clip.mp4": clip, **({"snapshot.jpg": snapshot} if snapshot else {})}
             evidence = self.locker.store(event_id, files, {
                 **context, "score": score, "summary": assessment.summary,
                 "indicators": assessment.indicators, "model": self.analyzer.model,
             })
-            self.frigate.retain(event_id)
+            if not ev.get("window"):
+                self.frigate.retain(event_id)
 
         self.db.save_result(event_id, score, assessment.summary, assessment.model_dump(), evidence)
         log.info("event %s score=%s reasons=%s", event_id, score, reasons)
@@ -111,7 +149,7 @@ class Pipeline:
                 f"{assessment.summary}\n\nCheck: {assessment.what_to_check_in_full_clip}\n"
                 f"Event: {event_id}"
             )
-            self.telegram.photo(caption, self.frigate.snapshot(event_id))
+            self.telegram.photo(caption, snapshot or self.frigate.snapshot(event_id))
 
     def _worker(self) -> None:
         while True:
@@ -167,10 +205,15 @@ class Pipeline:
         def on_connect(c, _userdata, _flags, reason_code, _props):
             log.info("mqtt connected: %s", reason_code)
             c.subscribe("frigate/events")
+            c.subscribe(POS_ALERT_TOPIC, qos=1)
 
         def on_message(_c, _userdata, msg):
             try:
-                self.on_frigate_event(json.loads(msg.payload))
+                payload = json.loads(msg.payload)
+                if msg.topic == POS_ALERT_TOPIC:
+                    self.on_pos_alert(payload)
+                else:
+                    self.on_frigate_event(payload)
             except Exception:
                 log.exception("bad frigate event")
 

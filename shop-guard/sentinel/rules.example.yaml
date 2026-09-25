@@ -24,6 +24,10 @@ watchlist:
 # (/shifts), which tells you who was in the shop at the time of any shortage.
 staff: []
 
+# Frigate camera that looks down on the cash drawer. POS alerts (drawer opened without
+# a sale, voids) pull this camera's footage around the alert for AI review.
+till_camera: front
+
 # true = analyse every person event (costly; use for a short intensive period).
 analyze_all_people: false
 

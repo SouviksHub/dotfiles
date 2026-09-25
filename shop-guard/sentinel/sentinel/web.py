@@ -202,3 +202,9 @@ def add_reference(request: Request, camera: str, reset: bool = False):
         return {"camera": camera, "references": w.add_reference(camera)}
     except RuntimeError as exc:
         raise HTTPException(404, str(exc))
+
+
+@app.get("/api/sightings")
+def sightings_api(request: Request, since: float, until: float):
+    """Raw face-recognition sightings; the POS feeds these into its AI loss analysis."""
+    return _p(request).db.sightings(since, until)
