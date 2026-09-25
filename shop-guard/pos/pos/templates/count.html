@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block body %}
+{% if result %}
+<div class="panel"><strong>Count posted</strong>
+<div class="table-wrap"><table><tr><th>Product</th><th class="n">Expected</th><th class="n">Counted</th><th class="n">Variance</th><th class="n">Value (cost)</th></tr>
+{% for o in result %}<tr><td>{{ o.name }}</td><td class="n">{{ o.expected }}</td><td class="n">{{ o.counted }}</td>
+<td class="n {{ 'bad' if o.variance < 0 }}">{{ o.variance }}</td><td class="n {{ 'bad' if o.value < 0 }}">{{ o.value|taka }}</td></tr>{% endfor %}
+</table></div>
+<p>Total missing at cost: <strong class="bad">{{ (result|selectattr('value', 'lt', 0)|map(attribute='value')|sum)|taka }}</strong></p>
+<a href="/owner/count">New count</a></div>
+{% else %}
+<div class="panel"><strong>Stock count</strong>
+<p class="muted">Most valuable stock first. Count the shelf, enter what is physically there, leave blank to skip.
+Blind count: the expected number is not shown, so staff can't just copy it.</p>
+<form method="post" action="/owner/count">
+<div class="table-wrap"><table><tr><th>Product</th><th>Counted</th></tr>
+{% for p in rows %}<tr><td>{{ p.name }}</td><td><input name="p_{{ p.id }}" type="number" min="0" style="width:90px"></td></tr>{% endfor %}
+</table></div>
+<p><button>Post count</button></p></form></div>
+{% endif %}
+{% endblock %}

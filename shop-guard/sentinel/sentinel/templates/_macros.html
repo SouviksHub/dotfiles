@@ -1,0 +1,6 @@
+{% macro score(s) -%}
+{%- if s is none %}<span class="score chip">…</span>
+{%- elif s >= 6 %}<span class="score s-high">{{ s }}/10</span>
+{%- elif s >= 3 %}<span class="score s-mid">{{ s }}/10</span>
+{%- else %}<span class="score s-low">{{ s }}/10</span>{% endif -%}
+{%- endmacro %}

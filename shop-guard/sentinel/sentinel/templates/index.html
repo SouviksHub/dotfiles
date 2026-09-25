@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% from "_macros.html" import score %}
+{% block body %}
+<div class="panel">
+  <strong>Ask the footage</strong>
+  <p class="muted">e.g. "What did {{ watchlist[0] if watchlist else 'the tagged employee' }} do near the till this week?"</p>
+  <textarea id="q"></textarea>
+  <p><button id="ask">Ask</button> <span class="muted" id="status"></span></p>
+  <pre id="answer"></pre>
+</div>
+
+<form class="filters panel" method="get">
+  <select name="person">
+    <option value="">Everyone</option>
+    {% for p in people %}<option {{ 'selected' if p == person }}>{{ p }}</option>{% endfor %}
+  </select>
+  <select name="min_score">
+    <option value="">Any score</option>
+    {% for s in [3, 6, 8] %}<option value="{{ s }}" {{ 'selected' if s == min_score }}>{{ s }}+</option>{% endfor %}
+  </select>
+  <select name="days">
+    {% for d in [1, 7, 30, 90] %}<option value="{{ d }}" {{ 'selected' if d == days }}>Last {{ d }} day{{ 's' if d > 1 }}</option>{% endfor %}
+  </select>
+  <button>Filter</button>
+</form>
+
+{% for r in rows %}
+<div class="panel">
+  <a class="row" href="/incident/{{ r.event_id }}">
+    <img loading="lazy" src="/media/{{ r.event_id }}/snapshot.jpg" alt="">
+    <div>
+      <div>{{ score(r.score) }} <strong>{{ r.person or 'Unrecognised' }}</strong> · {{ r.camera }}</div>
+      <div class="muted">{{ r.local_time }}{% if r.status != 'done' %} · {{ r.status }}{% endif %}</div>
+      <div>{{ r.summary or r.error or 'Waiting for analysis…' }}</div>
+      <div>{% for x in r.reasons or [] %}<span class="chip">{{ x }}</span>{% endfor %}</div>
+    </div>
+  </a>
+</div>
+{% else %}
+<div class="panel muted">No flagged events in this period.</div>
+{% endfor %}
+
+<script>
+document.getElementById("ask").onclick = async () => {
+  const status = document.getElementById("status"), out = document.getElementById("answer");
+  status.textContent = "Thinking…"; out.textContent = "";
+  try {
+    const r = await fetch("/api/ask", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({question: document.getElementById("q").value, days: {{ days }}})});
+    const j = await r.json();
+    out.textContent = j.answer || j.detail || "No answer";
+  } catch (e) { out.textContent = String(e); }
+  status.textContent = "";
+};
+</script>
+{% endblock %}

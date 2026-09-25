@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="panel">
+  <strong>Add product</strong>
+  <p class="muted">Take a photo of the box: Claude fills in the fields for you to check.</p>
+  <input type="file" id="photo" accept="image/*" capture="environment"> <span id="ai" class="muted"></span>
+  <form method="post" action="/owner/products" class="grid" style="margin-top:10px" id="pf">
+    <input name="name" placeholder="Name, e.g. Napa 500mg" required>
+    <input name="generic" placeholder="Generic"><input name="strength" placeholder="Strength">
+    <input name="form" placeholder="Form"><input name="manufacturer" placeholder="Manufacturer">
+    <input name="barcode" placeholder="Barcode (scan)">
+    <input name="price" inputmode="decimal" placeholder="Sale price ৳" required>
+    <input name="cost" inputmode="decimal" placeholder="Cost price ৳">
+    <input name="opening_stock" type="number" min="0" placeholder="Opening stock">
+    <input name="reorder_level" type="number" min="0" placeholder="Reorder level">
+    <button>Save product</button>
+  </form>
+</div>
+<form class="panel inline" method="get"><input name="q" value="{{ q }}" placeholder="Search"><button class="secondary">Search</button></form>
+<div class="panel table-wrap"><table>
+<tr><th>Name</th><th>Generic</th><th class="n">Price</th><th class="n">Cost</th><th class="n">Stock</th><th>Change price</th><th>Receive stock</th></tr>
+{% for p in rows %}<tr><td>{{ p.name }}</td><td>{{ p.generic or '' }}</td><td class="n">{{ p.price|taka }}</td><td class="n">{{ p.cost|taka }}</td>
+<td class="n {{ 'bad' if p.stock < 0 }}">{{ p.stock }}</td>
+<td><form class="inline" method="post" action="/owner/products/{{ p.id }}/price"><input name="price" inputmode="decimal" size="6" required><button class="secondary">Set</button></form></td>
+<td><form class="inline" method="post" action="/owner/products/{{ p.id }}/receive"><input name="qty" type="number" min="1" style="width:70px" required><input name="ref" placeholder="Invoice #" size="8" required><button class="secondary">Add</button></form></td></tr>
+{% else %}<tr><td colspan="7" class="muted">No products yet.</td></tr>{% endfor %}
+</table></div>
+<script>
+document.getElementById("photo").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return; const s = document.getElementById("ai"); s.textContent = "Reading package...";
+  const fd = new FormData(); fd.append("photo", f);
+  const r = await fetch("/owner/products/from-photo", {method: "POST", body: fd}); const j = await r.json();
+  if (!r.ok) { s.textContent = j.detail; return; }
+  const form = document.getElementById("pf");
+  for (const k of ["name", "generic", "strength", "form", "manufacturer", "barcode"]) if (j[k]) form.elements[k].value = j[k];
+  if (j.mrp_taka) form.elements.price.value = j.mrp_taka;
+  s.textContent = `Filled in (confidence: ${j.confidence}; pack: ${j.pack}). Check before saving.`;
+};
+</script>
+{% endblock %}

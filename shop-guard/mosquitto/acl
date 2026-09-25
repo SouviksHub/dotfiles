@@ -1,0 +1,3 @@
+# Devices may only publish their own readings.
+user drawer
+topic write shopguard/drawer/#

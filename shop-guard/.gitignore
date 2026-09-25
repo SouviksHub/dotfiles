@@ -1,0 +1,8 @@
+.env
+media/
+evidence/
+data/
+sentinel/rules.yaml
+__pycache__/
+*.pyc
+.pytest_cache/

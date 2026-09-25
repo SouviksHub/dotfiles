@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shop Guard</title>
+<style>
+:root { --bg:#0e1116; --panel:#171b22; --line:#262c36; --text:#e6e9ee; --muted:#8b95a5;
+        --accent:#3b82f6; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; }
+@media (prefers-color-scheme: light) {
+  :root { --bg:#f6f7f9; --panel:#fff; --line:#e3e6eb; --text:#141820; --muted:#5d6675; }
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--text);
+       font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+header { display:flex; gap:12px; align-items:center; padding:14px 16px;
+         border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:1; }
+header a { color:var(--text); text-decoration:none; font-weight:700; }
+main { max-width:960px; margin:0 auto; padding:16px; }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
+.muted { color:var(--muted); font-size:13px; }
+.row { display:flex; gap:12px; align-items:flex-start; text-decoration:none; color:inherit; }
+.row img { width:112px; height:72px; object-fit:cover; border-radius:8px; background:var(--line); flex:none; }
+.score { font-weight:700; border-radius:999px; padding:1px 9px; font-size:13px; }
+.s-low { background:color-mix(in srgb,var(--ok) 20%,transparent); color:var(--ok); }
+.s-mid { background:color-mix(in srgb,var(--warn) 22%,transparent); color:var(--warn); }
+.s-high { background:color-mix(in srgb,var(--bad) 22%,transparent); color:var(--bad); }
+.chip { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:0 8px; font-size:12px; margin:2px 4px 0 0; }
+form.filters { display:flex; flex-wrap:wrap; gap:8px; }
+select,input,textarea,button { font:inherit; color:var(--text); background:var(--bg);
+  border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+button { background:var(--accent); border-color:var(--accent); color:#fff; cursor:pointer; }
+textarea { width:100%; min-height:64px; }
+video,.hero { width:100%; border-radius:10px; background:#000; }
+pre { white-space:pre-wrap; word-break:break-word; }
+</style>
+</head>
+<body>
+<header><a href="/">Shop Guard</a><a class="muted" href="/shifts">Shifts</a></header>
+<main>{% block body %}{% endblock %}</main>
+</body>
+</html>

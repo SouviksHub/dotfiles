@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block body %}
+<form class="inline panel" method="get">
+  <select name="days">{% for d in [1, 7, 30] %}<option value="{{ d }}" {{ 'selected' if d == days }}>{{ 'Today' if d == 1 else 'Last %d days' % d }}</option>{% endfor %}</select>
+  <button class="secondary">Show</button>
+  <span class="muted">Drawer: {{ drawer_state or 'sensor not reporting' }} ·
+    Records: {% if audit_ok %}<span class="ok">intact</span>{% else %}<span class="bad">TAMPERED - {{ audit_problems|length }} problems</span>{% endif %}</span>
+</form>
+
+<div class="grid">
+  <div class="panel"><div class="muted">Sales</div><div class="big">{{ r.total|taka }}</div></div>
+  <div class="panel"><div class="muted">Voids</div><div class="big {{ 'warn' if r.voids }}">{{ r.voids|length }}</div></div>
+  <div class="panel"><div class="muted">Drawer alerts</div><div class="big {{ 'bad' if r.drawer_alerts }}">{{ r.drawer_alerts|length }}</div></div>
+  <div class="panel"><div class="muted">Cash short (closed shifts)</div>
+    <div class="big {{ 'bad' if r.shifts|selectattr('variance')|selectattr('variance', 'lt', 0)|list }}">
+      {{ (r.shifts|selectattr('variance')|selectattr('variance', 'lt', 0)|map(attribute='variance')|sum)|taka }}</div></div>
+</div>
+
+<div class="panel">
+  <strong>AI loss analysis</strong>
+  <p class="muted">Claude reads shifts, voids, payouts, drawer alerts, stock losses and the face-recognition shift log, and ranks where money is leaking.</p>
+  <form id="an" class="inline"><select name="days"><option value="7">7 days</option><option value="30">30 days</option></select><button>Analyse</button></form>
+  <pre id="analysis"></pre>
+</div>
+
+{% if pending %}
+<div class="panel"><strong class="warn">Voids waiting for your approval</strong>
+<div class="table-wrap"><table>
+{% for s in pending %}<tr><td>{{ s.receipt_no }}</td><td>{{ s.cashier }}</td><td>{{ s.ts|local }}</td><td class="n">{{ s.total|taka }}</td><td>{{ s.void_reason }}</td>
+<td><form class="inline" method="post" action="/owner/void/{{ s.id }}"><button name="approve" value="1">Approve</button><button class="secondary" name="approve" value="0">Reject</button></form></td></tr>{% endfor %}
+</table></div></div>
+{% endif %}
+
+<div class="panel"><strong>Shifts</strong>
+<div class="table-wrap"><table><tr><th>Cashier</th><th>Opened</th><th>Closed</th><th class="n">Expected</th><th class="n">Counted</th><th class="n">Variance</th></tr>
+{% for s in r.shifts %}<tr><td>{{ s.cashier }}</td><td>{{ s.opened_at|local }}</td><td>{{ s.closed_at|local }}</td>
+<td class="n">{{ s.expected_cash|taka if s.expected_cash is not none else 'open' }}</td><td class="n">{{ s.counted_cash|taka if s.counted_cash is not none else '-' }}</td>
+<td class="n {{ 'bad' if s.variance and s.variance < 0 }}">{{ s.variance|taka if s.variance is not none else '-' }}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">No shifts in this period.</td></tr>{% endfor %}</table></div></div>
+
+<div class="grid">
+<div class="panel"><strong>Sales by cashier</strong><table>
+{% for c in r.by_cashier %}<tr><td>{{ c.cashier }}</td><td class="n">{{ c.sales }}</td><td class="n">{{ c.total|taka }}</td></tr>
+{% else %}<tr><td class="muted">No sales.</td></tr>{% endfor %}</table></div>
+<div class="panel"><strong>Drawer alerts</strong><table>
+{% for a in r.drawer_alerts %}<tr><td>{{ a.ts|local }}</td><td class="bad">{{ a.detail }}</td></tr>
+{% else %}<tr><td class="muted">None.</td></tr>{% endfor %}</table></div>
+</div>
+
+<div class="grid">
+<div class="panel"><strong>Voids</strong><table>
+{% for v in r.voids %}<tr><td>{{ v.receipt_no }}</td><td>{{ v.cashier }}</td><td class="n">{{ v.total|taka }}</td><td>{{ v.status }}: {{ v.void_reason }}</td></tr>
+{% else %}<tr><td class="muted">None.</td></tr>{% endfor %}</table></div>
+<div class="panel"><strong>Payouts</strong><table>
+{% for p in r.payouts %}<tr><td>{{ p.ts|local }}</td><td>{{ p.cashier }}</td><td class="n">{{ p.amount|taka }}</td><td>{{ p.reason }}</td></tr>
+{% else %}<tr><td class="muted">None.</td></tr>{% endfor %}</table></div>
+</div>
+
+<div class="grid">
+<div class="panel"><strong>Stock-count losses</strong><table>
+{% for m in r.stock_variances if m.delta < 0 %}<tr><td>{{ m.name }}</td><td class="n">{{ m.delta }}</td><td class="n bad">{{ m.value|taka }}</td></tr>
+{% else %}<tr><td class="muted">None.</td></tr>{% endfor %}</table></div>
+<div class="panel"><strong>Low stock</strong><table>
+{% for p in low %}<tr><td>{{ p.name }}</td><td class="n">{{ p.stock }}</td></tr>{% else %}<tr><td class="muted">None.</td></tr>{% endfor %}</table></div>
+</div>
+
+<div class="grid">
+<div class="panel"><strong>Staff</strong><table>{% for u in users %}<tr><td>{{ u.name }}</td><td>{{ u.role }}</td></tr>{% endfor %}</table>
+  <form method="post" action="/owner/users" class="stack" style="margin-top:10px">
+    <input name="name" placeholder="Name (same as Face Library)" required><input name="pin" inputmode="numeric" placeholder="PIN (4-8 digits)" required>
+    <select name="role"><option value="cashier">Cashier</option><option value="owner">Owner</option></select><button class="secondary">Add staff</button></form></div>
+<div class="panel"><strong>Open drawer without sale</strong><p class="muted">Logged, and reviewed on camera like any drawer opening.</p>
+  <form method="post" action="/owner/no-sale" class="stack"><input name="reason" placeholder="Reason" required><button class="danger">Open drawer</button></form></div>
+</div>
+
+<script>
+document.getElementById("an").onsubmit = async e => {
+  e.preventDefault(); const out = document.getElementById("analysis"); out.textContent = "Analysing... (can take a minute)";
+  const r = await fetch("/owner/analyse", {method: "POST", body: new FormData(e.target)});
+  const j = await r.json(); out.textContent = j.analysis || j.detail;
+};
+</script>
+{% endblock %}

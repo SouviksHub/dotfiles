@@ -1,0 +1,103 @@
+# Shop Guard: Frigate NVR (24/7 recording + person/face detection)
+#             + Sentinel (theft-pattern analysis, evidence locker, alerts).
+# Bring up with:  docker compose up -d --build
+services:
+  mqtt:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    # Repo config is mounted read-only; the broker's own files (password file, ACL copy)
+    # live in data/mosquitto. Add the drawer sensor's login with:
+    #   docker compose exec mqtt mosquitto_passwd -b /mosquitto/data/passwd drawer <password>
+    #   docker compose kill -s SIGHUP mqtt
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        cp /mosquitto/src/acl /mosquitto/data/acl
+        touch /mosquitto/data/passwd
+        chown mosquitto:mosquitto /mosquitto/data/acl /mosquitto/data/passwd
+        chmod 0600 /mosquitto/data/acl /mosquitto/data/passwd
+        exec mosquitto -c /mosquitto/src/mosquitto.conf
+    volumes:
+      - ./mosquitto:/mosquitto/src:ro
+      - ./data/mosquitto:/mosquitto/data
+    ports:
+      - "1884:1884" # password-protected listener for LAN devices (drawer sensor) only
+
+  frigate:
+    image: ghcr.io/blakeblackshear/frigate:0.18.0
+    restart: unless-stopped
+    shm_size: "256mb"
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128 # Intel iGPU: video decode + OpenVINO
+    volumes:
+      - ./frigate/config:/config
+      - ${MEDIA_DIR:-./media}:/media/frigate
+      - /etc/localtime:/etc/localtime:ro
+      - type: tmpfs
+        target: /tmp/cache
+        tmpfs:
+          size: 1000000000
+    environment:
+      FRIGATE_RTSP_USER: ${FRIGATE_RTSP_USER}
+      FRIGATE_RTSP_PASSWORD: ${FRIGATE_RTSP_PASSWORD}
+      FRIGATE_FRONT_IP: ${FRIGATE_FRONT_IP}
+      FRIGATE_OUTSIDE_IP: ${FRIGATE_OUTSIDE_IP}
+    ports:
+      - "8971:8971" # authenticated Frigate UI (reach it over Tailscale)
+    depends_on:
+      - mqtt
+
+  sentinel:
+    build: ./sentinel
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      FRIGATE_URL: http://frigate:5000 # internal port, never published
+      MQTT_HOST: mqtt
+      RULES_PATH: /app/rules.yaml
+      EVIDENCE_DIR: /evidence
+      DB_PATH: /data/sentinel.db
+      DATA_DIR: /data
+    volumes:
+      - ./sentinel/rules.yaml:/app/rules.yaml:ro
+      - ${EVIDENCE_DIR:-./evidence}:/evidence
+      - ./data:/data
+    ports:
+      - "8080:8080" # Sentinel dashboard (reach it over Tailscale)
+    depends_on:
+      - frigate
+      - mqtt
+
+  pos:
+    build: ./pos
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POS_DB: /data/pos.db
+      POS_BACKUP_DIR: /evidence/db-backups
+      MQTT_HOST: mqtt
+      SENTINEL_URL: http://sentinel:8080
+    volumes:
+      - ./data:/data
+      - ${EVIDENCE_DIR:-./evidence}:/evidence
+    ports:
+      - "8090:8090" # till screen on the shop LAN; owner dashboard over Tailscale
+    depends_on:
+      - mqtt
+
+  # Copies the evidence locker (clips, ledger, daily DB snapshots) off-site every
+  # 15 minutes. `copy` never deletes at the destination, and the B2 key should have
+  # no delete permission, so wiping the shop box cannot wipe the off-site copy.
+  offsite:
+    image: rclone/rclone:1.75
+    restart: unless-stopped
+    env_file: .env
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          rclone copy /evidence "offsite:$${OFFSITE_BUCKET}/evidence" --log-level INFO
+          sleep 900
+        done
+    volumes:
+      - ${EVIDENCE_DIR:-./evidence}:/evidence:ro

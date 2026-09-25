@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% from "_macros.html" import score %}
+{% block body %}
+{% set a = r.assessment or {} %}
+<div class="panel">
+  <div>{{ score(r.score) }} <strong>{{ r.person or 'Unrecognised' }}</strong> · {{ r.camera }} · {{ r.local_time }}</div>
+  <div>{% for x in r.reasons or [] %}<span class="chip">{{ x }}</span>{% endfor %}
+       {% for x in a.indicators or [] if x != 'none' %}<span class="chip">{{ x }}</span>{% endfor %}</div>
+</div>
+<div class="panel">
+  <video controls preload="metadata" poster="/media/{{ r.event_id }}/snapshot.jpg" src="/media/{{ r.event_id }}/clip.mp4"></video>
+</div>
+<div class="panel">
+  <strong>Summary</strong> <span class="muted">(confidence: {{ a.confidence or '-' }})</span>
+  <p>{{ r.summary or r.error or 'Pending' }}</p>
+  {% if a.actions %}<strong>Timeline</strong>
+  <ul>{% for x in a.actions %}<li><span class="muted">{{ x.t }}s</span> {{ x.description }}</li>{% endfor %}</ul>{% endif %}
+  {% if a.what_to_check_in_full_clip %}<strong>Check in the full clip</strong><p>{{ a.what_to_check_in_full_clip }}</p>{% endif %}
+  {% if a.innocent_explanations %}<strong>Possible innocent explanations</strong>
+  <ul>{% for x in a.innocent_explanations %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+</div>
+{% if r.evidence %}
+<div class="panel">
+  <strong>Evidence locker</strong>
+  <p class="muted">Ledger entry #{{ r.evidence.seq }} · archived {{ r.evidence.archived_utc }} UTC</p>
+  <pre>{% for f, h in r.evidence.files.items() %}{{ f }}
+  sha256 {{ h }}
+{% endfor %}entry hash {{ r.evidence.hash }}</pre>
+</div>
+{% endif %}
+<p class="muted">Event id: {{ r.event_id }}</p>
+{% endblock %}
