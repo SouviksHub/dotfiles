@@ -1,0 +1,54 @@
+# Shop Guard: Frigate NVR (24/7 recording + person/face detection)
+#             + Sentinel (theft-pattern analysis, evidence locker, alerts).
+# Bring up with:  docker compose up -d --build
+services:
+  mqtt:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    # Not published to the host: only Frigate and Sentinel talk to it.
+
+  frigate:
+    image: ghcr.io/blakeblackshear/frigate:0.18.0
+    restart: unless-stopped
+    shm_size: "256mb"
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128 # Intel iGPU: video decode + OpenVINO
+    volumes:
+      - ./frigate/config:/config
+      - ${MEDIA_DIR:-./media}:/media/frigate
+      - /etc/localtime:/etc/localtime:ro
+      - type: tmpfs
+        target: /tmp/cache
+        tmpfs:
+          size: 1000000000
+    environment:
+      FRIGATE_RTSP_USER: ${FRIGATE_RTSP_USER}
+      FRIGATE_RTSP_PASSWORD: ${FRIGATE_RTSP_PASSWORD}
+      FRIGATE_FRONT_IP: ${FRIGATE_FRONT_IP}
+      FRIGATE_OUTSIDE_IP: ${FRIGATE_OUTSIDE_IP}
+    ports:
+      - "8971:8971" # authenticated Frigate UI (reach it over Tailscale)
+    depends_on:
+      - mqtt
+
+  sentinel:
+    build: ./sentinel
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      FRIGATE_URL: http://frigate:5000 # internal port, never published
+      MQTT_HOST: mqtt
+      RULES_PATH: /app/rules.yaml
+      EVIDENCE_DIR: /evidence
+      DB_PATH: /data/sentinel.db
+    volumes:
+      - ./sentinel/rules.yaml:/app/rules.yaml:ro
+      - ${EVIDENCE_DIR:-./evidence}:/evidence
+      - ./data:/data
+    ports:
+      - "8080:8080" # Sentinel dashboard (reach it over Tailscale)
+    depends_on:
+      - frigate
+      - mqtt

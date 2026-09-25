@@ -1,0 +1,112 @@
+# Frigate 0.18 configuration for two Tapo cameras.
+# After first boot, draw zones in the UI: Settings > Camera configuration > Masks / Zones.
+# Zone names must match `sensitive_zones` in sentinel/rules.yaml.
+
+mqtt:
+  enabled: true
+  host: mqtt
+  port: 1883
+
+# Intel N100/N150 mini PC: OpenVINO on the integrated GPU.
+detectors:
+  ov:
+    type: openvino
+    device: GPU
+
+model:
+  width: 300
+  height: 300
+  input_tensor: nhwc
+  input_pixel_format: bgr
+  path: /openvino-model/ssdlite_mobilenet_v2.xml
+  labelmap_path: /openvino-model/coco_91cl_bkgr.txt
+
+ffmpeg:
+  hwaccel_args: preset-vaapi
+  output_args:
+    # Video only. Frigate's default records audio; recording staff conversations
+    # is a criminal offence under Australian surveillance-devices law. Keep this.
+    record: preset-record-generic
+
+objects:
+  track:
+    - person
+  filters:
+    person:
+      min_score: 0.5
+      threshold: 0.7
+
+# 24/7 footage for 14 days, anything with motion for 30, people for 60-90.
+record:
+  enabled: true
+  continuous:
+    days: 14
+  motion:
+    days: 30
+  alerts:
+    retain:
+      days: 90
+      mode: all
+  detections:
+    retain:
+      days: 60
+      mode: motion
+
+snapshots:
+  enabled: true
+  bounding_box: true
+  timestamp: true
+  retain:
+    default: 60
+
+# Enroll staff in the UI (Face Library) using the exact names in rules.yaml.
+# `large` uses the iGPU; switch to `small` if CPU usage is too high.
+face_recognition:
+  enabled: true
+  model_size: large
+
+review:
+  alerts:
+    labels:
+      - person
+
+cameras:
+  # "Tapo - Pan (Front)" - SARKER MEDICAL HALL
+  front:
+    ffmpeg:
+      inputs:
+        # stream1 = full resolution. Used for detect too, so faces are large
+        # enough to recognise (stream2 is only 640x360).
+        - path: rtsp://{FRIGATE_RTSP_USER}:{FRIGATE_RTSP_PASSWORD}@{FRIGATE_FRONT_IP}:554/stream1
+          roles:
+            - record
+            - detect
+    detect:
+      width: 1280
+      height: 720
+      fps: 5
+    # Example zones - REDRAW these in the UI over the real counter/cabinet.
+    # zones:
+    #   cash_counter:
+    #     coordinates: 0.30,0.55,0.70,0.55,0.70,1.00,0.30,1.00
+    #     objects: [person]
+    #   s8_cabinet:
+    #     coordinates: 0.00,0.20,0.20,0.20,0.20,0.80,0.00,0.80
+    #     objects: [person]
+
+  # "Tapo-Outside" - Office
+  outside:
+    ffmpeg:
+      inputs:
+        - path: rtsp://{FRIGATE_RTSP_USER}:{FRIGATE_RTSP_PASSWORD}@{FRIGATE_OUTSIDE_IP}:554/stream1
+          roles:
+            - record
+            - detect
+    detect:
+      width: 1280
+      height: 720
+      fps: 5
+    # zones:
+    #   back_door:
+    #     coordinates: 0.60,0.30,0.90,0.30,0.90,0.90,0.60,0.90
+    #     objects: [person]

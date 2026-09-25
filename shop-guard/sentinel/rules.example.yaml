@@ -1,0 +1,38 @@
+# Copy to rules.yaml and edit. Sentinel reloads it on restart.
+
+timezone: Australia/Sydney
+
+# When the business is open. Anything outside these windows is "after hours".
+# Keys: mon..sun or ranges like mon-fri. Windows may cross midnight (22:00-02:00).
+business_hours:
+  mon-fri: ["08:30-19:00"]
+  sat: ["09:00-17:00"]
+  sun: []
+
+# Frigate zone names (drawn in the Frigate UI) where theft would happen.
+sensitive_zones:
+  - cash_counter
+  - s8_cabinet
+  - stockroom
+  - back_door
+
+# Names from Frigate's Face Library. Every appearance of these people is analysed
+# and archived, regardless of zone or time.
+watchlist:
+  - Employee_Name
+
+# Other enrolled staff (used for context in reports only).
+staff: []
+
+# true = analyse every person event (costly; use for a short intensive period).
+analyze_all_people: false
+
+# Ignore detections shorter than this (seconds), except after hours.
+min_duration_s: 3
+
+# Suspicion score 0-10 thresholds.
+alert_min_score: 6     # Telegram alert with snapshot
+evidence_min_score: 4  # copy clip into the tamper-evident evidence locker
+
+# Local time for the daily Telegram summary (24h "HH:MM"; empty to disable).
+daily_report_at: "21:30"
