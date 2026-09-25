@@ -38,6 +38,11 @@ class Frigate:
         r = self.http.get(f"/events/{event_id}/snapshot.jpg", params={"bbox": 1, "quality": 90})
         return r.content if r.status_code == 200 else None
 
+    def stats(self) -> dict:
+        r = self.http.get("/stats", timeout=15)
+        r.raise_for_status()
+        return r.json()
+
     def latest_frame(self, camera: str) -> bytes | None:
         r = self.http.get(f"/{camera}/latest.jpg", params={"quality": 85})
         return r.content if r.status_code == 200 else None

@@ -1,18 +1,17 @@
 # Copy to rules.yaml and edit. Sentinel reloads it on restart.
 
-timezone: Australia/Sydney
+timezone: Asia/Dhaka
 
 # When the business is open. Anything outside these windows is "after hours".
 # Keys: mon..sun or ranges like mon-fri. Windows may cross midnight (22:00-02:00).
 business_hours:
-  mon-fri: ["08:30-19:00"]
-  sat: ["09:00-17:00"]
-  sun: []
+  sat-thu: ["09:00-23:00"]
+  fri: ["15:00-23:00"]
 
 # Frigate zone names (drawn in the Frigate UI) where theft would happen.
 sensitive_zones:
   - cash_counter
-  - s8_cabinet
+  - medicine_cabinet
   - stockroom
   - back_door
 
@@ -21,7 +20,8 @@ sensitive_zones:
 watchlist:
   - Employee_Name
 
-# Other enrolled staff (used for context in reports only).
+# Every other enrolled staff member. Their appearances build the shift log
+# (/shifts), which tells you who was in the shop at the time of any shortage.
 staff: []
 
 # true = analyse every person event (costly; use for a short intensive period).

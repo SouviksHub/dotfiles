@@ -41,7 +41,7 @@ event context supplies a face-recognition tag, which you may repeat as "tagged a
 Theft patterns worth flagging in retail: cash moved from the till/counter to a pocket, \
 bag or clothing; the till opened with no customer present; items slipped into pockets, \
 sleeves or bags; goods handed to someone who does not pay; items taken from restricted \
-stock (e.g. S8 safe, dispensary shelves) without a visible script/workflow; stock carried \
+stock (e.g. controlled-drug cabinet, dispensary shelves) without a visible script/workflow; stock carried \
 toward exits, toilets or out of camera view; covering, turning or blocking the camera; \
 checking whether anyone is watching immediately before one of these acts.
 

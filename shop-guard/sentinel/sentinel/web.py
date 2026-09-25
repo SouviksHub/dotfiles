@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import secrets
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -22,6 +23,8 @@ from .frigate import Frigate
 from .notify import Telegram
 from .pipeline import Pipeline
 from .rules import Rules
+from .shifts import present_at, shift_log
+from .watchdog import Watchdog
 
 log = logging.getLogger(__name__)
 settings = Settings.from_env()
@@ -51,7 +54,14 @@ async def lifespan(app: FastAPI):
         frames_per_event=settings.frames_per_event,
     )
     pipeline.start(settings.mqtt_host, settings.mqtt_port)
+    watchdog = Watchdog(
+        frigate=frigate, telegram=pipeline.telegram, rules=rules, db=db,
+        ref_dir=settings.data_dir / "references", backup_dir=settings.evidence_dir / "db-backups",
+        healthcheck_url=settings.healthcheck_url,
+    )
+    watchdog.start()
     app.state.p = pipeline
+    app.state.w = watchdog
     yield
     pipeline.mqtt.loop_stop()
 
@@ -155,3 +165,40 @@ def report_now(request: Request):
         return {"report": _p(request).send_daily_report()}
     except AnalysisError as exc:
         raise HTTPException(502, str(exc))
+
+
+@app.get("/shifts", response_class=HTMLResponse)
+def shifts(request: Request, days: int = 14):
+    p = _p(request)
+    until = time.time()
+    rows = shift_log(p.db.sightings(until - days * 86400, until), p.rules.tz)
+    return templates.TemplateResponse(request, "shifts.html", {"rows": rows, "days": days})
+
+
+@app.get("/api/present")
+def present(request: Request, at: str):
+    """Who was in the shop around a local time, e.g. ?at=2026-02-10T14:30"""
+    p = _p(request)
+    ts = dt.datetime.fromisoformat(at).replace(tzinfo=p.rules.tz).timestamp()
+    return {"at": at, "present": present_at(p.db.sightings(ts - 86400, ts + 86400), ts)}
+
+
+@app.get("/api/watchdog")
+def watchdog_status(request: Request):
+    w: Watchdog = request.app.state.w
+    return {"problems": w.problems,
+            "cameras": {c: {"offline": s.offline.alerted, "covered": s.covered.alerted, "moved": s.moved.alerted}
+                        for c, s in w.state.items()}}
+
+
+@app.post("/api/watchdog/reference/{camera}")
+def add_reference(request: Request, camera: str, reset: bool = False):
+    """Save the camera's current view as known-good. Use reset=true after re-aiming a camera;
+    call again at night so the infrared view is also recognised."""
+    w: Watchdog = request.app.state.w
+    if reset:
+        w.reset_references(camera)
+    try:
+        return {"camera": camera, "references": w.add_reference(camera)}
+    except RuntimeError as exc:
+        raise HTTPException(404, str(exc))

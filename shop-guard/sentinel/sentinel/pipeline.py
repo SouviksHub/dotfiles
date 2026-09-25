@@ -47,6 +47,10 @@ class Pipeline:
         if kind != "end":
             return
         self._pinged.discard(ev["id"])
+        name = face_name(ev)
+        if name and name in (self.rules.staff | self.rules.watchlist):
+            start = float(ev["start_time"])
+            self.db.add_sighting(ev["id"], name, ev["camera"], start, float(ev.get("end_time") or start))
         reasons = self.rules.reasons(ev)
         if not reasons:
             return

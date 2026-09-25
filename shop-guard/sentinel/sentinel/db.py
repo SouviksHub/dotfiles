@@ -27,6 +27,16 @@ CREATE TABLE IF NOT EXISTS incidents (
 );
 CREATE INDEX IF NOT EXISTS idx_incidents_start ON incidents(start_ts);
 CREATE INDEX IF NOT EXISTS idx_incidents_person ON incidents(person);
+
+-- Every face-recognised appearance of enrolled staff: the shift log.
+CREATE TABLE IF NOT EXISTS sightings (
+    event_id  TEXT PRIMARY KEY,
+    name      TEXT NOT NULL,
+    camera    TEXT NOT NULL,
+    start_ts  REAL NOT NULL,
+    end_ts    REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sightings_start ON sightings(start_ts);
 """
 
 JSON_COLUMNS = ("zones", "reasons", "assessment", "evidence")
@@ -92,6 +102,26 @@ class DB:
         sql += " ORDER BY start_ts DESC LIMIT ?"
         args.append(limit)
         return [self._row(r) for r in self.conn.execute(sql, args).fetchall()]
+
+    def add_sighting(self, event_id: str, name: str, camera: str, start_ts: float, end_ts: float) -> None:
+        self._write(
+            "INSERT OR REPLACE INTO sightings (event_id, name, camera, start_ts, end_ts) VALUES (?, ?, ?, ?, ?)",
+            (event_id, name, camera, start_ts, end_ts),
+        )
+
+    def sightings(self, since: float, until: float) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM sightings WHERE start_ts >= ? AND start_ts < ? ORDER BY start_ts", (since, until))
+        return [dict(r) for r in rows.fetchall()]
+
+    def backup(self, dst: Path) -> None:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        target = sqlite3.connect(dst)
+        try:
+            with self._lock:
+                self.conn.backup(target)
+        finally:
+            target.close()
 
     def people(self) -> list[str]:
         rows = self.conn.execute("SELECT DISTINCT person FROM incidents WHERE person IS NOT NULL ORDER BY person")

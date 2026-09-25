@@ -26,6 +26,8 @@ class Settings:
     telegram_chat_id: str
     dashboard_user: str
     dashboard_password: str
+    healthcheck_url: str
+    data_dir: Path
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -43,4 +45,6 @@ class Settings:
             telegram_chat_id=_env("TELEGRAM_CHAT_ID"),
             dashboard_user=_env("DASHBOARD_USER", "owner"),
             dashboard_password=_env("DASHBOARD_PASSWORD"),
+            healthcheck_url=_env("HEALTHCHECK_URL"),
+            data_dir=Path(_env("DATA_DIR", "data")),
         )

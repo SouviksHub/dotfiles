@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="panel">
+  <strong>Shift log</strong>
+  <p class="muted">When each enrolled person was first and last recognised, per day (last {{ days }} days).</p>
+</div>
+{% for r in rows %}
+<div class="panel">
+  <strong>{{ r.name }}</strong> · {{ r.date.strftime('%a %d %b') }}
+  <div>{{ r.first.strftime('%H:%M') }} – {{ r.last.strftime('%H:%M') }}
+    <span class="muted">({{ r.sightings }} sightings)</span></div>
+  <div>{% for c in r.cameras %}<span class="chip">{{ c }}</span>{% endfor %}</div>
+</div>
+{% else %}
+<div class="panel muted">No recognised staff yet. Enroll faces in Frigate's Face Library and list the names under staff/watchlist in rules.yaml.</div>
+{% endfor %}
+{% endblock %}

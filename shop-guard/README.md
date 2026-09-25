@@ -23,11 +23,15 @@ everything on the mini PC, whether or not a subscription is active.
 |---|---|
 | 24/7 recording | Frigate keeps continuous video 14 days, motion 30 days, person events 60-90 days. Video only: no audio (see Legal). |
 | Knows who it is | Frigate face recognition tags enrolled staff by name. |
-| Decides what to review | `rules.yaml`: anyone in a **sensitive zone** (till, S8 cabinet, stockroom, back door), anyone **after hours**, and **every appearance of a watchlisted person**. |
+| Decides what to review | `rules.yaml`: anyone in a **sensitive zone** (till, medicine cabinet, stockroom, back door), anyone **after hours**, and **every appearance of a watchlisted person**. |
 | AI theft review | 10 frames per event go to Claude. It returns: a summary, a timestamped action list, theft indicators (cash pocketed, till opened with no customer, concealment, goods handed over without payment, camera tampering…), a 0-10 suspicion score, innocent explanations, and what to check in the full clip. |
 | Evidence locker | Clips scoring ≥ 4 (and every watchlist clip) are copied as read-only files, SHA-256 hashed, and chained in `ledger.jsonl`. `GET /api/evidence/verify` detects any edit, deletion or re-ordering. The clip is also exempted from Frigate's retention cleanup. |
 | Alerts | Telegram photo alert for scores ≥ 6. Instant ping when a person appears after hours. A daily summary at 21:30. |
 | Ask the footage | Type "What did Ravi do near the till this week?" and Claude answers from the incident log, citing incident ids. |
+| Tamper watchdog | Telegram alert within 2-3 minutes if a camera goes **offline**, is **covered** or blinded, or is **moved** (its edges no longer match the saved reference views), or if the recorder stops responding. |
+| Dead-man switch | Pings [healthchecks.io](https://healthchecks.io) every minute. If the box is unplugged, loses power or is stolen, healthchecks.io alerts you, because a dead box can't send its own alert. |
+| Off-site copies | Every 15 min the evidence locker plus a daily database snapshot is copied to Backblaze B2 using a key that **cannot delete**. Wiping the shop box can't wipe the copy. |
+| Shift log | Every face-recognised appearance of enrolled staff. `/shifts` shows who was in each day; `/api/present?at=2026-02-10T14:30` lists who was there around a given moment. |
 
 ## Hardware (AUD, approximate Sep 2026 retail)
 
@@ -46,12 +50,34 @@ Ways to cut it:
 - `CLAUDE_MODEL=claude-sonnet-5` (about 60% cheaper)
 - tighter zones, so fewer events are flagged
 
-**Two sites?** Your Tapo app lists the cameras under two homes ("SARKER MEDICAL
-HALL" and "Office"). If those are different buildings on different networks, the
-mini PC can't reach the second camera directly. You have two options:
-- Put a Raspberry Pi (about A$80) at the second site running Tailscale as a
-  [subnet router](https://tailscale.com/kb/1019/subnets), then use that camera's LAN IP as usual.
-- Run a second copy of Shop Guard at the second site.
+## Running a shop in Bangladesh from Australia
+
+The camera's RTSP video stream only exists inside the shop's network. A MAC address
+never leaves the local network, and TP-Link doesn't let other apps use its cloud, so
+**one device must sit on the shop's network**. The recommended layout:
+
+- The **mini PC lives at the shop** and does all the recording and AI work. The shop
+  keeps recording even when the internet drops.
+- **You connect from Australia over Tailscale**: dashboard, Frigate UI, SSH and the
+  shop router's settings page (advertise the shop LAN as a
+  [subnet route](https://tailscale.com/kb/1019/subnets)).
+- **Only small things cross the internet:** alerts, evidence clips going off-site,
+  and the clips you choose to watch.
+
+**Build it in Australia, install it in February:**
+1. Set up the mini PC completely at home: Ubuntu, Docker, Tailscale (with key expiry
+   disabled for this machine), this repo, `.env`, `rules.yaml`.
+2. Test it with one camera of the same model and try to defeat it (see Pre-flight
+   test below).
+3. Buy locally in Dhaka: the UPS (UPS batteries can't go on a flight), Cat6 cable
+   and conduit, and ideally the cameras (TP-Link VIGI is sold there).
+4. On site: put the box in the locked cabinet, plug in power and Ethernet. It joins
+   your Tailscale network by itself.
+5. Reserve each camera's IP on the shop router, using the camera's MAC address.
+
+**Before February, from Australia:** in the Tapo app, rotate the Pan camera 360° in
+live view and screenshot each direction. That gives you the floor plan for placing
+the new cameras. You can also set the Tapo Camera Account remotely.
 
 ## Setup
 
@@ -75,7 +101,7 @@ docker compose logs frigate | grep -i password       # first-run Frigate admin p
 Install Tailscale on your phone and sign in with the same account.
 
 ### 3. Frigate UI: `https://<mini-pc-tailscale-name>:8971`
-1. **Settings → Camera configuration → Masks / Zones.** Draw `cash_counter`, `s8_cabinet`, `stockroom` and `back_door`. The names must match `sensitive_zones` in `rules.yaml`.
+1. **Settings → Camera configuration → Masks / Zones.** Draw `cash_counter`, `medicine_cabinet`, `stockroom` and `back_door`. The names must match `sensitive_zones` in `rules.yaml`.
 2. **Face Library.** Create a face named exactly as in `watchlist` (for example `Ravi`) and upload 5-10 clear, front-on photos. Add other staff too, so they are told apart.
 3. Restart Sentinel after editing rules: `docker compose restart sentinel`.
 
@@ -103,33 +129,43 @@ To trigger the daily report on demand: `curl -u owner:<pw> -X POST http://<mini-
    Follow a documented process before dismissal (Fair Work unfair-dismissal rules
    still apply to theft).
 
-## Legal (Australia; check your state)
+## Legal
 
-- **Notice.** NSW (*Workplace Surveillance Act 2005*) requires 14 days' written notice
-  to employees before camera surveillance starts, cameras clearly visible, and signs
-  at the entrances. The ACT has similar rules. Covert surveillance of staff in NSW
-  needs a magistrate's covert surveillance authority. Hidden cameras without one make
-  your evidence a liability.
-- **No audio.** Recording private conversations without consent is an offence under
-  the state surveillance-devices Acts. Frigate is configured with
-  `preset-record-generic`, which records video only. Keep it that way.
-- **No cameras in toilets, change rooms or staff break rooms.** This is prohibited
-  outright in NSW and VIC.
-- **Face recognition.** Pharmacies are health service providers, so the *Privacy Act
-  1988* applies whatever your turnover. Biometric data is "sensitive information". The
-  OAIC found Bunnings in breach in 2024 for scanning customers' faces. So:
-  - enroll **staff only**, with their written consent;
-  - keep customer faces out of the Face Library;
-  - consider lowering `save_attempts` in `frigate/config/config.yml`.
+The shop, its staff and any police case are in **Bangladesh**, so Bangladeshi law
+applies, not Australian law. Check with a local lawyer before relying on footage
+against an employee. Safe defaults this system already follows:
+- cameras are visible, not hidden;
+- **no audio** (`preset-record-generic` records video only);
+- no cameras in toilets or changing areas;
+- the Face Library holds **staff only**, enrolled with their knowledge.
 
-This is not legal advice. For a theft matter heading to police or dismissal, an hour
-with an employment lawyer is cheap insurance.
+This is not legal advice.
+
+## Pre-flight test (do this at home before February)
+
+Nothing ships until every row triggers the expected alert:
+
+| Attack | Expected result |
+|---|---|
+| Unplug a camera's network cable | "OFFLINE" alert within about 2 minutes |
+| Cover a lens with tape or your hand | "COVERED" alert within about 3 minutes |
+| Turn a camera away | "MOVED" alert within about 3 minutes |
+| `docker compose stop frigate` | "recorder not responding" alert |
+| Pull the mini PC's power (UPS unplugged) | healthchecks.io alert after its grace period |
+| Delete a clip in `evidence/` | `/api/evidence/verify` reports it; the B2 copy survives |
+| Walk into the till zone after hours | Instant ping, then an AI-reviewed alert |
+
+After aiming each camera, save its view as known-good. Do it again at night so the
+infrared view is also recognised:
+`curl -u owner:<pw> -X POST "http://<box>:8080/api/watchdog/reference/<camera>?reset=true"`
+(drop `reset=true` for the night-time call).
 
 ## Operations
 
 | Task | Command |
 |---|---|
 | Logs | `docker compose logs -f sentinel` |
+| Watchdog status | `curl -u owner:<pw> http://<box>:8080/api/watchdog` |
 | Verify evidence integrity | `curl -u owner:<pw> http://<mini-pc>:8080/api/evidence/verify` |
 | Incident JSON | `GET /api/incidents?days=30&person=Ravi&min_score=6` |
 | Run tests | `cd sentinel && pip install -r requirements.txt pytest && pytest` |
