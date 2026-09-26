@@ -34,6 +34,8 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 
+from cashwatch import Counter, PoseDetector, draw_pose
+
 W, H = 640, 360          # detection frame size
 SEG_SECONDS = 60         # HD buffer segment length
 log = logging.getLogger("shopwatch")
@@ -48,6 +50,8 @@ class Cfg:
         self.tz = ZoneInfo(g.get("timezone", "UTC"))
         self.data = Path(os.path.expanduser(g.get("data_dir", "~/shopwatch/data")))
         self.model = os.path.expanduser(g.get("model", "~/shopwatch/yolo11n-320.onnx"))
+        self.pose_model = os.path.expanduser(g.get("pose_model",
+                                                   "~/shopwatch/yolo11n-pose-320.onnx"))
         self.open_hours = g.get("open_hours", "09:00-21:00")
         self.fps = float(g.get("detect_fps", 2))
         self.threads = int(g.get("threads", 3))
@@ -63,6 +67,8 @@ class Cfg:
         self.llm_url = l.get("base_url", "")
         self.llm_key = l.get("api_key", "") or _local_ai_key()
         self.report_time = l.get("daily_report_time", "")
+        s = c.get("sensors", {})
+        self.sensor_port, self.sensor_token = int(s.get("port", 8090)), s.get("token", "")
         self.cameras = c.get("camera", [])
         if not self.cameras:
             sys.exit("config: no [[camera]] entries")
@@ -112,11 +118,11 @@ class EventDB:
             self.db.execute("INSERT INTO events VALUES(?,?,?,?,?,?)", row)
             self.db.commit()
 
-    def since(self, ts):
+    def since(self, ts, until=None):
         with self.lock:
             return self.db.execute(
-                "SELECT ts,camera,kind,detail FROM events WHERE ts>=? ORDER BY ts",
-                (ts,)).fetchall()
+                "SELECT ts,camera,kind,detail FROM events WHERE ts>=? AND ts<? ORDER BY ts",
+                (ts, until or 1e12)).fetchall()
 
 
 # ------------------------------------------------------------------ detector
@@ -231,8 +237,12 @@ def _ffmpeg_input(url):
 
 
 class Camera:
-    def __init__(self, spec, cfg, state, det, tg, db):
+    def __init__(self, spec, cfg, state, det, tg, db, pose=None):
         self.name = spec["name"]
+        self.fps = float(spec.get("detect_fps", cfg.fps))
+        self.pose, self.counter, self.last_pose = pose, None, []
+        if "counter" in spec:
+            self.counter = Counter(spec["counter"], W, H, self._counter_emit)
         self.detect_url = spec["detect_url"]
         self.record_url = spec.get("record_url", "")
         self.cfg, self.state, self.det, self.tg, self.db = cfg, state, det, tg, db
@@ -276,7 +286,7 @@ class Camera:
 
     def _detect_loop(self):
         cmd = ["ffmpeg", "-nostdin", "-loglevel", "error", *_ffmpeg_input(self.detect_url),
-               "-an", "-vf", f"fps={self.cfg.fps},scale={W}:{H}",
+               "-an", "-vf", f"fps={self.fps},scale={W}:{H}",
                "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"]
         size = W * H * 3
         while True:
@@ -317,6 +327,14 @@ class Camera:
             self.bg = g               # re-baseline, and detect on the next frame:
             self.last_detect = 0.0    # lights switching on is itself suspicious
             return
+        if self.counter is not None:
+            # Counter cameras run pose on every frame: a cashier's hands move
+            # in small, fast gestures that the motion gate would miss.
+            self.last_pose = self.pose.run(frame, self.counter.person_conf, self.counter.roi)
+            self.counter.update(now, self.last_pose)
+            people = [(*p["box"], p["score"]) for p in self.last_pose]
+            self._rules(now, frame, people)
+            return
         # A person standing still makes no motion; keep detecting for 15 s
         # after the last sighting so dwell timers don't reset.
         # A 30 s heartbeat detection catches anyone already standing still.
@@ -326,7 +344,9 @@ class Camera:
             return
 
         self.last_detect = now
-        people = self.det.persons(frame, self.cfg.conf)
+        self._rules(now, frame, self.det.persons(frame, self.cfg.conf))
+
+    def _rules(self, now, frame, people):
         if people:
             self.last_person_t = now
             self.person_hits += 1
@@ -358,6 +378,10 @@ class Camera:
                 self._event("ZONE", f"person in '{z['name']}' for "
                             f"{now - z['entered']:.0f}s", frame, people)
 
+    def _counter_emit(self, kind, detail, severity, tid):
+        people = [(*p["box"], p["score"]) for p in self.last_pose]
+        self._event(kind, detail, self.last_frame, people, severity)
+
     def _check_covered(self, gray, now, frame):
         """Lens covered/sprayed or pointed at a wall: near-uniform image for 20 s."""
         if gray.std() < 6:
@@ -382,15 +406,29 @@ class Camera:
             cv2.polylines(img, [z["poly"]], True, (0, 200, 255), 2)
             cv2.putText(img, z["name"], tuple(int(v) for v in z["poly"][0]),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
+        if self.counter is not None:
+            c = self.counter
+            for poly, label, col in ((c.staff_z, "staff", (0, 255, 0)),
+                                     (c.cust_z, "customer", (255, 0, 255)),
+                                     (c.drawer_z, "drawer", (0, 255, 255)),
+                                     (c.exch_z, "exchange", (255, 255, 0))):
+                if poly is not None:
+                    cv2.polylines(img, [poly], True, col, 1)
+                    cv2.putText(img, label, tuple(int(v) for v in poly[0]),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, col, 1)
+            draw_pose(img, self.last_pose, c.kp_conf)
         for x, y, w, h, c in people:
             cv2.rectangle(img, (int(x), int(y)), (int(x + w), int(y + h)), (0, 0, 255), 2)
             cv2.putText(img, f"{c:.2f}", (int(x), int(y) - 4),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
         return img
 
-    def _event(self, kind, detail, frame, people):
+    def _event(self, kind, detail, frame, people, severity="high"):
         ts = self.cfg.now()
-        eid = f"{ts:%Y%m%d-%H%M%S}-{self.name}-{kind.lower()}"
+        eid = f"{ts:%Y%m%d-%H%M%S}-{self.name}-{kind.lower()}-{uuid.uuid4().hex[:4]}"
+        if severity == "low":             # statistics only: no alert, no files
+            self.db.add(eid, ts.timestamp(), self.name, kind, detail, "")
+            return
         edir = self.cfg.data / "events" / eid
         edir.mkdir(parents=True, exist_ok=True)
         jpeg = None
@@ -401,8 +439,9 @@ class Camera:
                 jpeg = buf.tobytes()
                 (edir / "snapshot.jpg").write_bytes(jpeg)
         self.db.add(eid, ts.timestamp(), self.name, kind, detail, str(edir))
-        icon = {"INTRUSION": "🚨", "ZONE": "⚠️", "TAMPER": "🛑",
-                "CAMERA_DOWN": "📵"}.get(kind, "•")
+        icon = {"INTRUSION": "🚨", "ZONE": "⚠️", "TAMPER": "🛑", "CAMERA_DOWN": "📵",
+                "CASH_TO_POCKET": "💸", "DRAWER_TO_POCKET": "💸", "HANDS_UP": "🆘",
+                "PANIC": "🆘", "NO_SALE_OPEN": "🗄️", "DRAWER_LEFT_OPEN": "🗄️"}.get(kind, "•")
         self.tg.send(f"{icon} {kind} · {self.name} · {ts:%H:%M:%S}\n{detail}", jpeg)
         if self.record_url:
             Janitor.harvest_later(self, ts.timestamp(), edir)
@@ -437,6 +476,8 @@ class Janitor:
                 self._prune_events()
                 for c in self.cams:
                     c.watchdog()
+                    if c.counter is not None:
+                        c.counter.tick(time.time())
             except Exception:
                 log.exception("janitor")
             time.sleep(15)
@@ -481,19 +522,77 @@ class Janitor:
             shutil.rmtree(dirs.pop(0), ignore_errors=True)
 
 
+# ------------------------------------------------------------------ sensors
+def sensor_server(cfg, state, cams):
+    """HTTP hook for hardware: ESP32 reed switch on the cash drawer, panic button.
+      POST /drawer/<camera>/open|closed      POST /panic      header X-Token: <token>"""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    by_name = {c.name: c for c in cams}
+
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            if not cfg.sensor_token or self.headers.get("X-Token") != cfg.sensor_token:
+                self.send_response(403)
+                self.end_headers()
+                return
+            parts = self.path.strip("/").split("/")
+            ok = True
+            if parts[0] == "drawer" and len(parts) == 3 and parts[1] in by_name \
+                    and by_name[parts[1]].counter is not None:
+                by_name[parts[1]].counter.sensor(time.time(), parts[2] == "open")
+            elif parts[0] == "panic":
+                for c in cams:
+                    c._event("PANIC", "panic button pressed", c.last_frame,
+                             [(*p["box"], p["score"]) for p in c.last_pose])
+            else:
+                ok = False
+            self.send_response(200 if ok else 404)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    ThreadingHTTPServer(("0.0.0.0", cfg.sensor_port), H).serve_forever()
+
+
 # ------------------------------------------------------------------ report
+def _day_counts(db, start, end):
+    counts = {}
+    for _, cam, kind, _ in db.since(start, end):
+        counts[(cam, kind)] = counts.get((cam, kind), 0) + 1
+    return counts
+
+
 def daily_report(cfg, db, tg):
     start = cfg.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    rows = db.since(start.timestamp())
-    counts = {}
-    for _, cam, kind, _ in rows:
-        counts[(cam, kind)] = counts.get((cam, kind), 0) + 1
-    plain = "\n".join(f"{c} {k}: {n}" for (c, k), n in sorted(counts.items())) or "no events"
+    t0 = start.timestamp()
+    rows = db.since(t0)
+    counts = _day_counts(db, t0, None)
+    # Per-counter pocket-touch rate against that counter's own 7-day baseline:
+    # a cashier who skims touches pockets more than on honest days.
+    base = {}
+    for d in range(1, 8):
+        for (cam, kind), n in _day_counts(db, t0 - d * 86400, t0 - (d - 1) * 86400).items():
+            base.setdefault((cam, kind), []).append(n)
+    lines = []
+    for (cam, kind), n in sorted(counts.items()):
+        hist = base.get((cam, kind), [])
+        avg = sum(hist) / 7 if hist else 0
+        flag = "  ⬆️ above 7-day average" if kind in ("POCKET", "NO_SALE_OPEN") \
+            and hist and n > 1.5 * avg + 2 else ""
+        lines.append(f"{cam} {kind}: {n} (7d avg {avg:.1f}){flag}")
+    txn = [d for _, _, k, d in rows if k == "TXN"]
+    if txn:
+        nod = sum("drawer=no" in d for d in txn)
+        lines.append(f"transactions seen: {len(txn)}, without drawer: {nod} "
+                     "(UPI/card, or cash not put in the drawer: compare with the bill count)")
+    plain = "\n".join(lines) or "no events"
     text = f"📋 Daily report {start:%Y-%m-%d}\n{plain}"
     if cfg.llm_url and rows:
         lines = "\n".join(
             f"{dt.datetime.fromtimestamp(ts, cfg.tz):%H:%M} {cam} {kind}: {d}"
-            for ts, cam, kind, d in rows[-150:])
+            for ts, cam, kind, d in rows if kind not in ("POCKET", "TXN"))[-6000:]
+        lines = plain + "\n\nevent log:\n" + lines
         try:
             req = urllib.request.Request(
                 cfg.llm_url.rstrip("/") + "/chat/completions",
@@ -502,7 +601,10 @@ def daily_report(cfg, db, tg):
                      "You summarise a shop's security event log for the owner. "
                      "Be factual and brief. Group repeated events, point out "
                      "unusual times or patterns, and list what to review first. "
-                     "Only use facts from the log."},
+                     "CASH_TO_POCKET, DRAWER_TO_POCKET, HANDS_UP and PANIC matter most; "
+                     "flag counters whose pocket or no-sale counts are above their "
+                     "7-day average. Only use facts from the log; never accuse anyone, "
+                     "say which clips to watch."},
                     {"role": "user", "content": lines}],
                     "temperature": 0.2, "max_tokens": 400}).encode(),
                 headers={"Content-Type": "application/json",
@@ -535,7 +637,9 @@ def main():
     state, db = State(cfg), EventDB(cfg.data / "events.db")
     tg = Telegram(cfg)
     det = Detector(cfg.model, cfg.threads)
-    cams = [Camera(s, cfg, state, det, tg, db) for s in cfg.cameras]
+    pose = (PoseDetector(cfg.pose_model, cfg.threads)
+            if any("counter" in s for s in cfg.cameras) else None)
+    cams = [Camera(s, cfg, state, det, tg, db, pose) for s in cfg.cameras]
     for c in cams:
         state.cams[c.name] = c
         c.start()
@@ -551,6 +655,10 @@ def main():
             for c in cams:
                 age = time.time() - c.last_frame_t
                 lines.append(f"{c.name}: {'OK' if age < 10 else f'no frame {age:.0f}s'}")
+                hv = c.counter.hip_visibility() if c.counter else None
+                if hv is not None:
+                    lines.append(f"  staff hips visible {hv:.0%} of frames"
+                                 + ("  ← move camera: pocket rules need hips" if hv < 0.6 else ""))
             free = shutil.disk_usage(cfg.data).free / 1e9
             lines.append(f"free disk {free:.1f} GB")
             tg.send("\n".join(lines))
@@ -567,6 +675,8 @@ def main():
     if tg.on:
         threading.Thread(target=tg.poll_commands, args=(on_command,), daemon=True).start()
     threading.Thread(target=scheduler, args=(cfg, db, tg), daemon=True).start()
+    if cfg.sensor_token:
+        threading.Thread(target=sensor_server, args=(cfg, state, cams), daemon=True).start()
     tg.send(f"shopwatch started: {', '.join(c.name for c in cams)} · "
             f"hours {cfg.open_hours} · armed now: {state.armed()}")
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))

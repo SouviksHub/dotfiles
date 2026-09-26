@@ -30,6 +30,12 @@ base_url = "http://127.0.0.1:8080/v1"
 api_key = ""              # empty = read from ~/.config/local-ai/env
 daily_report_time = "21:45"
 
+[sensors]
+# HTTP hook for hardware on the LAN (ESP32 drawer reed switch, hidden panic button).
+# Enabled when token is set; use a long random string: head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n'
+port = 8090
+token = ""
+
 # One [[camera]] per Tapo camera.
 # In the Tapo app: Camera → Settings → Advanced Settings → Camera Account → set a username and password.
 # URL-encode special characters in the password (@ → %40, : → %3A, / → %2F).
@@ -43,9 +49,24 @@ record_url = "rtsp://USER:PASS@192.168.1.50:554/stream1"
 # frame. A person's feet (bottom-centre of the box) inside the zone for dwell_seconds
 # triggers an alert. when = "always" | "open" | "closed".
 # Get coordinates from a /snap image: x_pixel/640, y_pixel/360.
+detect_fps = 6            # counter cameras need 5-8 fps: a pocketing gesture lasts ~1 s
 zones = [
-  { name = "cash_drawer", polygon = [[0.55,0.55],[0.95,0.55],[0.95,1.0],[0.55,1.0]], dwell_seconds = 6, when = "always" },
+  { name = "cash_drawer", polygon = [[0.55,0.55],[0.95,0.55],[0.95,1.0],[0.55,1.0]], dwell_seconds = 6, when = "closed" },
 ]
+
+# Cash-handling rules (pose based) for this camera: CASH_TO_POCKET, DRAWER_TO_POCKET,
+# NO_SALE_OPEN, HANDS_UP, DRAWER_LEFT_OPEN (sensor). Polygons are normalised to the
+# full frame. staff_zone / customer_zone are tested against a person's TORSO
+# (hips, else shoulders); drawer_zone / exchange_zone against the WRISTS.
+[camera.counter]
+roi           = [0.2, 0.0, 1.0, 1.0]     # crop before pose → counter seen at native resolution
+staff_zone    = [[0.2,0.0],[0.6,0.0],[0.6,1.0],[0.2,1.0]]
+customer_zone = [[0.75,0.0],[1.0,0.0],[1.0,1.0],[0.75,1.0]]
+drawer_zone   = [[0.45,0.75],[0.7,0.75],[0.7,1.0],[0.45,1.0]]
+exchange_zone = [[0.6,0.35],[0.78,0.35],[0.78,0.7],[0.6,0.7]]
+drawer_sensor = false          # true once the ESP32 reed switch is installed
+pocket_after_drawer_s = 10
+txn_idle_s = 20
 
 [[camera]]
 name = "shelves"

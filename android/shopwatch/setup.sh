@@ -30,12 +30,18 @@ deb "[ -x /root/shopwatch/venv/bin/python ] || python3 -m venv /root/shopwatch/v
      /root/shopwatch/venv/bin/pip install -q --upgrade pip
      /root/shopwatch/venv/bin/pip install -q numpy onnxruntime opencv-python-headless"
 
-if [[ ! -f "$SW/yolo11n-320.onnx" ]]; then
-  log "Exporting YOLO11n person detector to ONNX (one-off, ~1 GB temp download)"
+if [[ ! -f "$SW/yolo11n-320.onnx" || ! -f "$SW/yolo11n-pose-320.onnx" ]]; then
+  log "Exporting YOLO11n detector + pose models to ONNX (one-off, ~1 GB temp download)"
   deb "set -e; cd /tmp && python3 -m venv exp && exp/bin/pip install -q ultralytics onnx onnxslim
-       exp/bin/yolo export model=yolo11n.pt format=onnx imgsz=320 opset=17 simplify=True
-       mv yolo11n.onnx /root/shopwatch/yolo11n-320.onnx; rm -rf exp yolo11n.pt"
+       for m in yolo11n yolo11n-pose; do
+         exp/bin/yolo export model=\$m.pt format=onnx imgsz=320 opset=17 simplify=True
+         mv \$m.onnx /root/shopwatch/\$m-320.onnx; rm -f \$m.pt
+       done
+       rm -rf exp"
 fi
+
+log "Self-test of the counter rules"
+deb "cd /root/$rel && /root/shopwatch/venv/bin/python -m unittest -q test_cashwatch"
 
 if [[ ! -f "$SW/config.toml" ]]; then
   cp "$DIR/config.example.toml" "$SW/config.toml"
