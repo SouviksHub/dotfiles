@@ -5,6 +5,7 @@
 # Overrides (env vars):
 #   MODEL_URL=<gguf url>   force a specific model instead of the RAM-based pick
 #   CTX=<n>                context window
+#   BIG=1                  on 8 GB phones, use 7B instead of 3B (see README)
 #   LAN=1                  bind the server to 0.0.0.0 instead of 127.0.0.1
 set -euo pipefail
 
@@ -73,8 +74,14 @@ elif (( mem_mib < 2600 )); then
   url="$hf/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf"; need=500;  ctx=2048
 elif (( mem_mib < 5000 )) || [[ "$arch" != "aarch64" ]]; then
   url="$hf/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"; need=1100; ctx=4096
-elif (( mem_mib < 7500 )); then
+elif (( mem_mib < 6500 )); then
   url="$hf/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf";     need=2000; ctx=4096
+elif (( mem_mib < 11000 )) && [[ "${BIG:-0}" != 1 ]]; then
+  # 8 GB phones (MemTotal ~7.2-7.7 GiB): Android + services hold ~3 GiB, so a
+  # 7B model (~5 GiB with KV cache) gets LMK-killed under pressure and runs at
+  # 2-4 tok/s, too slow for multi-step agent loops. Spend the headroom on a
+  # longer context instead (3B KV cache at 8K ctx is only ~0.3 GiB). BIG=1 opts into 7B.
+  url="$hf/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf";     need=2000; ctx=8192
 else
   url="$hf/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf";     need=4700; ctx=4096
 fi

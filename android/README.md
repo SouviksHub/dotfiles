@@ -44,13 +44,24 @@ ai-status
 |---------------|-------------------------|--------|-------------------|
 | < 2.6 GiB     | Qwen2.5-0.5B-Instruct   | 0.4 GB | 15–30 tok/s       |
 | < 5 GiB       | Qwen2.5-1.5B-Instruct   | 1.0 GB | 6–15 tok/s        |
-| < 7.5 GiB     | Qwen2.5-3B-Instruct     | 1.9 GB | 4–8 tok/s         |
-| ≥ 7.5 GiB     | Qwen2.5-7B-Instruct     | 4.7 GB | 2–4 tok/s         |
+| < 6.5 GiB     | Qwen2.5-3B-Instruct     | 1.9 GB | 4–8 tok/s         |
+| 6.5–11 GiB (8 GB phones) | Qwen2.5-3B-Instruct, 8K ctx | 1.9 GB | 4–8 tok/s |
+| ≥ 11 GiB, or `BIG=1` | Qwen2.5-7B-Instruct | 4.7 GB | 2–4 tok/s         |
 
 \*Generation on a 2018–2021 Snapdragon 8xx. Generation speed is limited by memory bandwidth (every token reads
 all the weights once), so `tok/s ≈ bandwidth / model_bytes`. Older mid-range SoCs run at about half these speeds.
 
 Overrides: `MODEL_URL=<gguf url> CTX=8192 LAN=1 bash bootstrap.sh`.
+
+**8 GB phones:** an "8 GB" phone reports about 7.2–7.7 GiB of MemTotal, and Android plus background services keep about 3 GiB of that.
+A 7B model with its KV cache needs about 5 GiB, so it does fit, but the low-memory killer shuts it down whenever
+the phone is under memory pressure. At 2–4 tok/s, one agent step (read prompt → tool call → answer)
+also takes minutes. The default is therefore 3B with an 8K context. Opt into 7B with `BIG=1 bash bootstrap.sh`, and only
+on a phone that does nothing but run the server (debloated, no other apps).
+
+**Agents are limited by prompt processing, not generation.** Every step re-sends the system prompt, the tool schemas and the history.
+`llama-server` reuses the KV cache for a shared prompt prefix, so keep the system prompt and tool list
+**byte-identical across calls** and only append to the end. Then each step processes only the new tokens.
 
 ## 3. Run agents
 
