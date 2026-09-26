@@ -1,0 +1,56 @@
+# shopwatch config. The filled-in copy lives at ~/shopwatch/config.toml (mode 600:
+# it holds camera and Telegram credentials; never commit it).
+
+[general]
+timezone = "Asia/Kolkata"
+data_dir = "~/shopwatch/data"
+model = "~/shopwatch/yolo11n-320.onnx"
+# Outside these hours the system is ARMED: any person is an intrusion alert.
+# Overnight ranges work ("22:00-06:00"). Override from Telegram: /arm /disarm /auto
+open_hours = "09:00-21:30"
+detect_fps = 2            # frames analysed per second per camera
+threads = 3               # CPU threads for the detector (<= big cores; leave 1 for ffmpeg)
+person_conf = 0.45        # raise it if you get false alerts, lower it if people are missed
+buffer_minutes = 20       # rolling HD buffer; event clips are linked out of it
+event_retention_days = 30
+min_free_gb = 3           # oldest events are deleted when free space drops below this
+record_audio = false      # audio recording has stricter legal rules than video in many places
+
+[telegram]
+# 1. In Telegram, message @BotFather → /newbot → copy the token.
+# 2. Send your bot any message, then open
+#    https://api.telegram.org/bot<TOKEN>/getUpdates  and copy message.chat.id
+# Only this chat can send commands to the bot.
+bot_token = ""
+chat_id = ""
+
+[llm]
+# The phone's llama-server (android/bootstrap.sh). Only used to write the daily summary.
+base_url = "http://127.0.0.1:8080/v1"
+api_key = ""              # empty = read from ~/.config/local-ai/env
+daily_report_time = "21:45"
+
+# One [[camera]] per Tapo camera.
+# In the Tapo app: Camera → Settings → Advanced Settings → Camera Account → set a username and password.
+# URL-encode special characters in the password (@ → %40, : → %3A, / → %2F).
+# Give each camera a fixed IP (DHCP reservation in your router).
+#   stream2 = 640x360 substream (detection, cheap)   stream1 = full HD (evidence clips)
+[[camera]]
+name = "counter"
+detect_url = "rtsp://USER:PASS@192.168.1.50:554/stream2"
+record_url = "rtsp://USER:PASS@192.168.1.50:554/stream1"
+# Zones are polygons in normalised coordinates (0-1, top-left origin) on the camera
+# frame. A person's feet (bottom-centre of the box) inside the zone for dwell_seconds
+# triggers an alert. when = "always" | "open" | "closed".
+# Get coordinates from a /snap image: x_pixel/640, y_pixel/360.
+zones = [
+  { name = "cash_drawer", polygon = [[0.55,0.55],[0.95,0.55],[0.95,1.0],[0.55,1.0]], dwell_seconds = 6, when = "always" },
+]
+
+[[camera]]
+name = "shelves"
+detect_url = "rtsp://USER:PASS@192.168.1.51:554/stream2"
+record_url = "rtsp://USER:PASS@192.168.1.51:554/stream1"
+zones = [
+  { name = "high_value_shelf", polygon = [[0.0,0.3],[0.35,0.3],[0.35,1.0],[0.0,1.0]], dwell_seconds = 20, when = "open" },
+]

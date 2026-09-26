@@ -24,6 +24,9 @@ points at it via `OPENAI_BASE_URL`. No root needed.
      adb shell "/system/bin/device_config set_sync_disabled_for_tests persistent"
      adb shell "/system/bin/device_config put activity_manager max_phantom_processes 2147483647"
      ```
+   - Or run `android/adb-prep.sh` from a PC. It applies this fix, exempts Termux from Doze, and disables bloat
+     with `pm disable-user`. That needs no root and is fully reversible; replacing the OS is not worth it, because
+     postmarketOS and Ubuntu Touch lack working charging, thermal and Wi-Fi drivers on most phones.
 5. Keep it plugged in. If the phone is running 24/7, cap the charge (many OEM ROMs have "protect battery / 80%") —
    a lithium cell held at 100% and 40 °C swells.
 
@@ -81,7 +84,13 @@ or add a runit service next to `$PREFIX/var/service/llama`.
 won't install, run it inside `proot-distro install debian` (a glibc userland, so manylinux wheels install normally) and
 keep llama-server native in Termux. Running proot costs about 10–30% on syscalls but nothing on inference.
 
-## 4. Use the phone from other machines
+## 4. Shop CCTV: theft and intrusion alerts
+
+See [`shopwatch/`](shopwatch/README.md). It runs YOLO person detection on Tapo RTSP streams, zone rules,
+tamper and camera-down alerts, and saves HD clips of every event. Alerts go to Telegram, and the local LLM
+writes the daily summary.
+
+## 5. Use the phone from other machines
 
 Default bind is `127.0.0.1`. To serve the LAN:
 
