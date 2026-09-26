@@ -1,0 +1,6 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Termux:Boot entry point: keep the CPU awake, then start runit services.
+termux-wake-lock
+. "$PREFIX/etc/profile"
+sshd
+exec service-daemon start

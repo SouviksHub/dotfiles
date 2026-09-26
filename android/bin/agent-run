@@ -1,0 +1,11 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Run any command with the local model wired in as an OpenAI-compatible backend.
+#   agent-run python my_agent.py
+set -euo pipefail
+. "$HOME/.config/local-ai/env"
+host="$HOST"; [[ "$host" == 0.0.0.0 ]] && host=127.0.0.1
+export OPENAI_BASE_URL="http://$host:$PORT/v1"
+export OPENAI_API_BASE="$OPENAI_BASE_URL"
+export OPENAI_API_KEY="$API_KEY"
+export OPENAI_MODEL="$(basename "$MODEL" .gguf)"
+exec "$@"
