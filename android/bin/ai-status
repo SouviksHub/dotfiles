@@ -1,0 +1,22 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Server health plus the phone metrics that actually limit throughput.
+. "$HOME/.config/local-ai/env"
+host="$HOST"; [[ "$host" == 0.0.0.0 ]] && host=127.0.0.1
+
+printf 'model:   %s\n' "$(basename "$MODEL")"
+printf 'server:  %s\n' "$(curl -fsS "http://$host:$PORT/health" 2>/dev/null || echo DOWN)"
+command -v sv >/dev/null && printf 'runit:   %s\n' "$(sv status llama 2>/dev/null || echo 'not enabled')"
+awk '/^MemAvailable:/ {printf "mem:     %d MiB available\n", $2/1024}' /proc/meminfo
+
+max=0
+for z in /sys/class/thermal/thermal_zone*/temp; do
+  t="$(cat "$z" 2>/dev/null)" || continue
+  [[ "$t" =~ ^[0-9]+$ ]] && (( t > max )) && max=$t
+done
+(( max > 1000 )) && max=$(( max / 1000 ))
+(( max > 0 )) && printf 'temp:    %d C (hottest zone)\n' "$max"
+
+if command -v termux-battery-status >/dev/null; then
+  timeout 5 termux-battery-status 2>/dev/null \
+    | jq -r '"battery: \(.percentage)% \(.status) \(.temperature)C"' 2>/dev/null
+fi

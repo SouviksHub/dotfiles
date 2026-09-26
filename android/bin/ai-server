@@ -1,0 +1,13 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Foreground llama.cpp server with the config written by bootstrap.sh.
+set -euo pipefail
+. "$HOME/.config/local-ai/env"
+exec llama-server \
+  -m "$MODEL" \
+  -t "$THREADS" \
+  -c "$CTX" \
+  --parallel 1 \
+  --host "$HOST" \
+  --port "$PORT" \
+  --api-key "$API_KEY" \
+  --jinja
